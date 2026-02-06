@@ -1,0 +1,422 @@
+```markdown
+# Low-Level Design Document
+
+## Table of Contents
+1. [Overview](#overview)  
+2. [Module and Package Structure](#module-and-package-structure)  
+3. [Class Diagrams and Design](#class-diagrams-and-design)  
+4. [Database Schema Design](#database-schema-design)  
+5. [FastAPI Route Implementations](#fastapi-route-implementations)  
+6. [Streamlit UI Layouts and Components](#streamlit-ui-layouts-and-components)  
+7. [Data Models and Pydantic Schemas](#data-models-and-pydantic-schemas)  
+8. [Service Layer Design Patterns](#service-layer-design-patterns)  
+9. [Repository Pattern Implementations](#repository-pattern-implementations)  
+10. [Unit Testing Structure and Mocking Strategies](#unit-testing-structure-and-mocking-strategies)  
+11. [Code Organization and Folder Structure](#code-organization-and-folder-structure)  
+12. [Configuration Management Approach](#configuration-management-approach)  
+
+---
+
+## 1. Overview
+
+This document defines the low-level design of the application to support a Financial Portfolio Management system (example domain), providing user role-based data management, workflow automation, reporting, and analytics using FastAPI and Streamlit. It aims at maintainability, scalability, security, and performance.
+
+---
+
+## 2. Module and Package Structure
+
+The codebase is organized by domain/functionality and architectural layers:
+
+```
+app/
+├── api/                    # FastAPI route definitions (endpoint modules)
+│   ├── auth.py
+│   ├── users.py
+│   ├── portfolio.py
+│   ├── reports.py
+│   └── ...
+├── core/
+│   ├── config.py           # Configuration management
+│   ├── security.py         # Authentication, authorization helpers
+│   ├── exceptions.py       # Custom exceptions
+│   └── logger.py           # Logger setup
+├── models/
+│   ├── base.py             # Base ORM classes
+│   ├── user.py
+│   ├── portfolio.py
+│   ├── audit.py
+│   └── ...
+├── schemas/
+│   ├── user.py             # Pydantic schemas for User related data
+│   ├── portfolio.py
+│   ├── workflow.py
+│   └── ...
+├── services/               # Business logic services
+│   ├── user_service.py
+│   ├── portfolio_service.py
+│   ├── workflow_service.py
+│   └── ...
+├── repositories/           # Data access layer (repository pattern)
+│   ├── user_repository.py
+│   ├── portfolio_repository.py
+│   └── ...
+├── db/
+│   ├── base.py             # Declarative base and DB init
+│   ├── session.py          # DB Session management
+│   └── migrations/
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   ├── api/
+│   └── ...
+├── ui/
+│   ├── pages/
+│   │   ├── login.py
+│   │   ├── dashboard.py
+│   │   ├── portfolio.py
+│   │   └── reports.py
+│   ├── components/
+│   └── main.py             # Entrypoint for Streamlit app
+└── utils/                  # Helper functions and utilities
+    ├── validators.py
+    ├── notifications.py
+    └── ...
+```
+
+---
+
+## 3. Class Diagrams and Design
+
+### 3.1 Key Classes Overview
+
+#### User (models/user.py)
+- Properties: id (UUID), username, email, hashed_password, role (Enum), is_active, created_at, updated_at
+- Methods: verify_password(), set_password(), has_permission()
+
+#### Portfolio (models/portfolio.py)
+- Properties: id, owner_id (FK → User), name, description, status, created_at
+- Methods: calculate_net_worth(), add_asset(), remove_asset()
+
+#### Asset (models/portfolio.py)
+- Properties: id, portfolio_id (FK), type (Enum), purchase_price, current_value, quantity
+
+#### AuditLog (models/audit.py)
+- Properties: id, user_id, action, entity, timestamp, details (JSON)
+
+#### Workflow (models/workflow.py)
+- Properties: id, entity_id, status, current_step, created_at, updated_at
+- Methods: advance_step(), rollback_step()
+
+---
+
+## 4. Database Schema Design
+
+Applied using SQLAlchemy ORM with migration support via Alembic.
+
+Example tables:
+
+### users
+
+| Column           | Type         | Constraints                  |
+|------------------|--------------|------------------------------|
+| id               | UUID (PK)    | PRIMARY KEY, DEFAULT gen_uuid() |
+| username         | VARCHAR(50)  | UNIQUE, NOT NULL             |
+| email            | VARCHAR(255) | UNIQUE, NOT NULL             |
+| hashed_password  | VARCHAR(255) | NOT NULL                    |
+| role             | ENUM         | NOT NULL                    |
+| is_active        | BOOLEAN      | DEFAULT TRUE                |
+| created_at       | TIMESTAMP    | DEFAULT CURRENT_TIMESTAMP   |
+| updated_at       | TIMESTAMP    | ON UPDATE CURRENT_TIMESTAMP |
+
+Indexes: username (unique), email (unique)
+
+---
+
+### portfolios
+
+| Column         | Type         | Constraints                        |
+|----------------|--------------|----------------------------------|
+| id             | UUID (PK)    | PRIMARY KEY, DEFAULT gen_uuid()  |
+| owner_id       | UUID (FK)    | REFERENCES users(id), NOT NULL   |
+| name           | VARCHAR(100) | NOT NULL                        |
+| description    | TEXT         |                                  |
+| status         | ENUM         | NOT NULL, DEFAULT 'active'       |
+| created_at     | TIMESTAMP    | DEFAULT CURRENT_TIMESTAMP        |
+
+Indexes: owner_id
+
+---
+
+### audit_logs
+
+| Column       | Type        | Constraints                     |
+|--------------|-------------|--------------------------------|
+| id           | UUID (PK)   | PRIMARY KEY                    |
+| user_id      | UUID (FK)   | REFERENCES users(id)           |
+| action       | VARCHAR(50) | NOT NULL                      |
+| entity       | VARCHAR(50) | NOT NULL                      |
+| timestamp    | TIMESTAMP   | DEFAULT CURRENT_TIMESTAMP      |
+| details      | JSONB       |                               |
+
+Indexes: user_id, timestamp
+
+---
+
+## 5. FastAPI Route Implementations
+
+### Dependency Injection Example
+
+```python
+from fastapi import Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from app.db.session import get_db
+from app.core.security import get_current_active_user
+
+@app.get("/portfolios", response_model=List[PortfolioOut])
+def read_portfolios(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    portfolios = portfolio_service.get_portfolios(db, user_id=current_user.id, skip=skip, limit=limit)
+    return portfolios
+```
+
+---
+
+### Route Summary
+
+| Method | Path                  | Description                                | Auth Required | Response Model       |
+|--------|-----------------------|--------------------------------------------|---------------|---------------------|
+| POST   | /auth/login           | User login, returns access token           | No            | Token schema        |
+| GET    | /users/me             | Get current user profile                    | Yes           | UserOut schema      |
+| GET    | /portfolios           | List portfolios for user                    | Yes           | List[PortfolioOut]  |
+| POST   | /portfolios           | Create new portfolio                        | Yes           | PortfolioOut        |
+| PUT    | /portfolios/{id}      | Update portfolio details                    | Yes           | PortfolioOut        |
+| DELETE | /portfolios/{id}      | Delete portfolio                           | Yes           | JSON status message |
+| GET    | /reports/generate     | Generate reports based on filters          | Yes           | Report data         |
+
+---
+
+## 6. Streamlit UI Layouts and Components
+
+### 6.1 Main Page Layout (ui/main.py)
+
+```python
+import streamlit as st
+from ui.pages import login, dashboard, portfolio, reports
+
+def main():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Go to", ["Login", "Dashboard", "Portfolio", "Reports"])
+
+    if page == "Login":
+        login.render()
+    elif page == "Dashboard":
+        dashboard.render()
+    elif page == "Portfolio":
+        portfolio.render()
+    elif page == "Reports":
+        reports.render()
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+### 6.2 Portfolio Page Components (ui/pages/portfolio.py)
+
+- Data table view with sortable/searchable portfolio items
+- Add/Edit forms with validation
+- Charts showing asset distribution (using `st.pyplot` or `st.altair_chart`)
+
+---
+
+## 7. Data Models and Pydantic Schemas
+
+### Example: User Schema (schemas/user.py)
+
+```python
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+from uuid import UUID
+from enum import Enum
+
+class UserRole(str, Enum):
+    admin = "admin"
+    manager = "manager"
+    end_user = "end_user"
+    auditor = "auditor"
+
+class UserBase(BaseModel):
+    username: str
+    email: EmailStr
+    role: UserRole
+
+class UserCreate(UserBase):
+    password: str
+
+class UserUpdate(BaseModel):
+    email: Optional[EmailStr]
+    role: Optional[UserRole]
+    is_active: Optional[bool]
+
+class UserOut(UserBase):
+    id: UUID
+    is_active: bool
+
+    class Config:
+        orm_mode = True
+```
+
+Pydantic models ensure request payload validation and response schema consistency.
+
+---
+
+## 8. Service Layer Design Patterns
+
+- Services encapsulate business logic:
+  - Validate input data against rules
+  - Coordinate workflow transitions
+  - Manage transactional workflows calling repositories
+  - Handle security and notification triggers
+
+Example `portfolio_service.py` function:
+
+```python
+def create_portfolio(db: Session, portfolio_create: PortfolioCreate, owner_id: UUID) -> Portfolio:
+    # Business validations
+    if portfolio_repository.name_exists(db, portfolio_create.name, owner_id):
+        raise ValueError("Portfolio name already exists")
+    new_portfolio = Portfolio(
+        name=portfolio_create.name,
+        description=portfolio_create.description,
+        owner_id=owner_id,
+        status='active'
+    )
+    db.add(new_portfolio)
+    db.commit()
+    db.refresh(new_portfolio)
+    return new_portfolio
+```
+
+---
+
+## 9. Repository Pattern Implementations
+
+Repositories abstract DB operations to core CRUD for each entity.
+
+Example `portfolio_repository.py`:
+
+```python
+class PortfolioRepository:
+    def __init__(self, db_session: Session):
+        self.db = db_session
+
+    def get(self, portfolio_id: UUID):
+        return self.db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+
+    def list_by_owner(self, owner_id: UUID, skip=0, limit=100):
+        return self.db.query(Portfolio).filter(Portfolio.owner_id == owner_id).offset(skip).limit(limit).all()
+
+    def add(self, portfolio: Portfolio):
+        self.db.add(portfolio)
+        self.db.commit()
+        self.db.refresh(portfolio)
+        return portfolio
+
+    def name_exists(self, name: str, owner_id: UUID) -> bool:
+        return self.db.query(Portfolio).filter(Portfolio.name == name, Portfolio.owner_id == owner_id).first() is not None
+```
+
+---
+
+## 10. Unit Testing Structure and Mocking Strategies
+
+- **Structure:**
+
+```
+tests/
+├── unit/
+│   ├── services/
+│   │   ├── test_user_service.py
+│   │   ├── test_portfolio_service.py
+│   └── repositories/
+│       ├── test_user_repository.py
+│       └── ...
+├── integration/
+│   ├── test_api_endpoints.py
+│   └── ...
+├── api/
+│   └── test_auth.py
+```
+
+- **Testing tools:**  
+  Use pytest, unittest.mock for mocking DB sessions, external services, and test client for API.
+
+- **Mocking:**  
+  Mock DB sessions with fixtures; mock external API calls; patch notification services to prevent actual sends.
+
+Example test snippet for service:
+
+```python
+import pytest
+from unittest.mock import MagicMock
+from app.services.portfolio_service import create_portfolio
+
+def test_create_portfolio_success():
+    mock_db = MagicMock()
+    portfolio_create = PortfolioCreate(name="Retirement Fund", description="Long term portfolio")
+    owner_id = "some-uuid"
+    
+    # Setup mocks on repository call
+    mock_db.query().filter().first.return_value = None  # name doesn't exist
+    
+    portfolio = create_portfolio(mock_db, portfolio_create, owner_id)
+    assert portfolio.name == "Retirement Fund"
+```
+
+---
+
+## 11. Code Organization and Folder Structure
+
+- Separation of concerns into layers/packages
+- Naming conventions:
+  - snake_case for file names/modules
+  - PascalCase for classes
+  - snake_case for functions and variables
+- Use explicit relative and absolute imports as appropriate
+- Maintain consistent formatting with `black`, lint with `flake8` or `pylint`
+
+---
+
+## 12. Configuration Management Approach
+
+- Use Pydantic `BaseSettings` for environment-based config (app/core/config.py):
+
+```python
+from pydantic import BaseSettings, Field
+
+class Settings(BaseSettings):
+    app_name: str = "Portfolio Management System"
+    database_url: str = Field(..., env="DATABASE_URL")
+    secret_key: str = Field(..., env="SECRET_KEY")
+    access_token_expire_minutes: int = 30
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+settings = Settings()
+```
+
+- Separate sensitive credentials from code; support local dev `.env` and containerized environment vars.
+- Central logger configured once (app/core/logger.py).
+
+---
+
+# End of Design Document
+
+---
+
+This comprehensive low-level design document provides a complete blueprint for implementation teams to build out the system according to best practices tailored to FastAPI, Streamlit, and Python ecosystem.
+
+```
+This completes the low-level design document as requested.

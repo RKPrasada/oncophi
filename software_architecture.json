@@ -1,0 +1,268 @@
+```markdown
+# Software Architecture Document
+
+## Table of Contents
+1. [System Architecture Overview](#system-architecture-overview)  
+2. [Component Architecture and Microservices Breakdown](#component-architecture-and-microservices-breakdown)  
+3. [Data Architecture and Database Design](#data-architecture-and-database-design)  
+4. [Security Architecture and Authentication Patterns](#security-architecture-and-authentication-patterns)  
+5. [Integration Patterns and External Service Connections](#integration-patterns-and-external-service-connections)  
+6. [Deployment Architecture and Infrastructure Requirements](#deployment-architecture-and-infrastructure-requirements)  
+7. [Technology Stack Justification and Alternatives Analysis](#technology-stack-justification-and-alternatives-analysis)  
+8. [Scalability and Performance Considerations](#scalability-and-performance-considerations)  
+9. [Monitoring and Logging Architecture](#monitoring-and-logging-architecture)  
+
+---
+
+## 1. System Architecture Overview
+
+### 1.1 Architecture Style
+The system follows a microservices-inspired modular architecture composed of loosely coupled components communicating over well-defined APIs. The main components include:
+
+- **Frontend:** Streamlit-based single-page application (SPA) for interactive UI.
+- **Backend API:** FastAPI application exposing RESTful endpoints with asynchronous support and dependency injection.
+- **Database:** PostgreSQL relational database with JSONB support for semi-structured data.
+- **Caching Layer:** Redis (optional) for accelerated data retrieval and API rate limiting.
+- **Message Broker:** Optional asynchronous event communication via RabbitMQ or Kafka for webhook/event notifications.
+
+### 1.2 High-Level Diagram
+
+```plaintext
++-----------------+     HTTPS     +-------------------+        SQL        +-----------------+
+|  Streamlit SPA  | <-----------> |   FastAPI Backend  | <--------------> |  PostgreSQL DB  |
+|  (Frontend)     |               |   (Business Logic) |                   |                 |
++-----------------+               +-------------------+                   +-----------------+
+                                    |                 \
+                                    |                  \
+                                    |                   \
+                             +------------+          +----------+
+                             |  Redis     |          | Message  |
+                             |  (Cache)   |          | Broker   |
+                             +------------+          +----------+
+```
+
+---
+
+## 2. Component Architecture and Microservices Breakdown
+
+### 2.1 Frontend (Streamlit)
+
+- Provides dynamic forms and dashboards.
+- Real-time client-side validation with server sync.
+- Handles user authentication token-based sessions.
+- Communicates with backend via REST API and WebSocket for notifications.
+
+### 2.2 Backend API (FastAPI)
+
+- Modular, async REST API endpoints grouped by domain (auth, data management, reporting).
+- Implements business logic, validation, RBAC.
+- Provides webhook support for async event notifications.
+- Error handling conforming to standard HTTP statuses.
+- Middleware for request throttling and logging.
+
+### 2.3 Database (PostgreSQL)
+
+- Centralized relational data store.
+- Designed with normalized schemas plus JSONB columns for flexible metadata.
+- Enforces constraints, triggers for data integrity.
+- Supports read replicas for reporting traffic.
+
+### 2.4 Caching (Redis)
+
+- Optional layer to store frequently accessed data.
+- Implements API rate limiting tokens.
+- Improves read performance for dashboards.
+
+### 2.5 Optional Event System
+
+- For asynchronous processing of long-running tasks or update broadcasts.
+- Webhook delivery management via queues.
+
+---
+
+## 3. Data Architecture and Database Design
+
+### 3.1 Data Model
+- Tables for Users, Roles, Permissions, DataEntries, Reports, AuditLogs, and Notifications.
+- User Roles linked via junction tables for many-to-many permissions.
+- AuditLogs capture immutable, append-only records of data changes.
+  
+### 3.2 Database Schema Highlights
+| Table         | Purpose                                      |
+|---------------|----------------------------------------------|
+| Users         | Stores user credentials & profile info      |
+| Roles         | Defines roles (admin, standard, read-only)  |
+| Permissions   | Maps capabilities to roles                   |
+| DataEntries   | Main application data with FK integrity     |
+| Reports       | Saved report parameters and results cache   |
+| AuditLogs     | Append-only, timestamped changes             |
+| Notifications | Webhook/event queue metadata                  |
+
+### 3.3 Indexing and Performance
+- Index on foreign keys and frequently queried columns.
+- Partitioning planned based on date for AuditLogs.
+- Use of connection pooling for database connections.
+
+---
+
+## 4. Security Architecture and Authentication Patterns
+
+### 4.1 Authentication & Authorization
+- JWT token-based authentication with Bearer tokens.
+- Passwords stored with strong hashing (bcrypt/argon2).
+- Supports multi-factor authentication (MFA).
+- Role-Based Access Control (RBAC) enforced on API endpoints.
+
+### 4.2 Data Protection
+- Data encryption at rest via cloud provider.
+- TLS enforced for all communication (frontend, backend, DB).
+- Secrets management via secured vault solutions (e.g. HashiCorp Vault, Kubernetes secrets).
+
+### 4.3 OWASP Mitigation
+- Input validation and sanitation to prevent injection and XSS.
+- CSRF protection within frontend workflows.
+- Rate limiting and account lockout on suspicious login behavior.
+- Regular vulnerability scanning and patch management.
+
+### 4.4 Audit and Compliance
+- Logging all user actions and data changes immutable in AuditLogs.
+- Data export/deletion user rights compliant with GDPR.
+- Retain audit logs for a minimum of 3 years with tamper-evident storage.
+
+---
+
+## 5. Integration Patterns and External Service Connections
+
+### 5.1 API Design
+- REST endpoints structured by resource:
+  - e.g. `/api/v1/users`, `/api/v1/data-entries`, `/api/v1/reports`
+- Versioning via URI to allow for backward-compatible API evolution.
+- Consistent request/response schemas using Pydantic models.
+- Errors returned with HTTP codes and structured JSON error bodies.
+
+### 5.2 External Integrations
+- Email service integration for user notifications.
+- Webhook endpoints for downstream event consumers.
+- Third-party authentication providers (e.g., OAuth2) support planned as extension.
+
+### 5.3 Asynchronous Communication
+- Use of message broker for event-driven flows.
+- Webhooks queued and retry with exponential backoff on failures.
+- Optional web sockets for real-time frontend updates.
+
+---
+
+## 6. Deployment Architecture and Infrastructure Requirements
+
+### 6.1 Containerization
+- All services containerized using Dockerfiles.
+- Health checks defined per container.
+- Environment variable management externalized for config and secrets.
+
+### 6.2 Orchestration
+- Kubernetes recommended to manage container lifecycle.
+- Deployment includes:
+  - Separate namespaces for dev, staging, production.
+  - Horizontal Pod Autoscaler configured for backend and frontend.
+  - Rolling updates and rollback enabled.
+
+### 6.3 Cloud Infrastructure
+- Deployment in cloud provider with regions compliant with GDPR.
+- Managed PostgreSQL (e.g., AWS RDS, Azure Database) with multi-AZ high availability.
+- Use of Redis as managed service or sidecar container.
+
+### 6.4 Networking and Security
+- Ingress controller with TLS termination.
+- Network policies to isolate frontend, backend, and database.
+- API gateway optionally for rate limiting and authentication.
+
+### 6.5 CI/CD Pipeline
+- Automated pipelines triggered on code push.
+- Build → Test → Security scan → Container publish → Deploy workflow.
+- Canary deployments and automated rollback on failures.
+
+### 6.6 Backup and Disaster Recovery
+- Regular automated backups of databases with encrypted storage.
+- Restore tested quarterly.
+- Disaster recovery playbook covering multi-region failover.
+
+---
+
+## 7. Technology Stack Justification and Alternatives Analysis
+
+| Component      | Selected Technology           | Justification                                               | Alternatives                                      |
+|----------------|------------------------------|-------------------------------------------------------------|--------------------------------------------------|
+| Frontend       | Streamlit                    | Fast development of data-centric UI, integrates with Python| React/Angular (complex UI), Dash                  |
+| Backend        | FastAPI                     | High-performance, async support, Python native ecosystem   | Flask, Django REST Framework                      |
+| Programming    | Python                      | Mature libraries, strong ecosystem, easy integration       | Node.js, Go, Java                                 |
+| Database       | PostgreSQL                  | Robust RDBMS, JSONB support for flexibility, ACID compliance | MySQL, MariaDB, MongoDB                           |
+| Deployment     | Docker + Kubernetes         | Standard container orchestration, scalable, community support | Docker Swarm, Nomad                               |
+| Caching        | Redis                       | Popular in-memory data store supporting rate limiting/cache | Memcached, Hazelcast                              |
+| Messaging      | RabbitMQ / Kafka (optional) | Reliable async event processing pattern                    | Amazon SQS, Google Pub/Sub                        |
+
+---
+
+## 8. Scalability and Performance Considerations
+
+- Backend services horizontally scalable with stateless containers.
+- Database scaling via read replicas and partitioning.
+- Caching layer to reduce database load for frequent queries.
+- Use asynchronous programming in FastAPI to handle high concurrency.
+- Load balancing via Kubernetes service mesh.
+- Rate limiting and throttling to protect backend from abuse.
+- Monitoring of resource utilization triggers auto-scaling.
+
+---
+
+## 9. Monitoring and Logging Architecture
+
+### 9.1 Centralized Logging
+- Use ELK stack (Elasticsearch, Logstash, Kibana) or EFK variant.
+- Collect logs from all containers.
+- Log aggregation filters critical security and error events for alerting.
+
+### 9.2 Metrics and Monitoring
+- Prometheus with Grafana dashboards.
+- Track health, latency, throughput per service.
+- Monitor database metrics through managed service tools.
+
+### 9.3 Alerting
+- Alerts for error spikes, resource exhaustion, security incidents.
+- Notification channels integrated with email and Slack.
+
+### 9.4 Tracing
+- Distributed tracing (e.g. OpenTelemetry) prepared for backend APIs.
+- Useful for debugging complex workflows and bottlenecks.
+
+---
+
+# Diagrams
+
+### System Architecture Diagram
+
+![System Architecture](https://user-images.githubusercontent.com/fake_path/system_architecture_diagram.png)
+
+### Deployment Architecture Diagram
+
+![Deployment Architecture](https://user-images.githubusercontent.com/fake_path/deployment_architecture_diagram.png)
+
+---
+
+# Conclusion
+
+This architecture supports all functional requirements with modular, scalable components. Security and compliance are enforced throughout with industry best practices. The selected technology stack balances developer productivity with high performance. The design is resilient and extensible for evolving business needs.
+
+---
+
+# Appendix
+
+- API Spec: OpenAPI (Swagger) documentation linked separately.
+- Database ER diagrams.
+- Security policy reference documents.
+- CI/CD pipeline YAML samples.
+
+---
+
+Prepared by: Principal Software Architect  
+Date: 2024-06-05  
+```
